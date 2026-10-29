@@ -1,0 +1,12 @@
+[project]
+name = "recall-speed-trainer"
+version = "0.1.0"
+description = "Local recall-speed training with Anki decks and typing logs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "zstandard==0.25.0",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>想起速度トレーナー</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">想</span><div><h1>想起速度トレーナー</h1><p>文字を見て、思い出すまでの時間を測る</p></div></div>
+    <span class="local-badge">● ローカル保存</span>
+  </header>
+  <div id="message" role="status" class="message" hidden></div>
+  <main>
+    <aside class="panel settings-panel">
+      <div class="section-title"><h2>学習設定</h2><span class="eyebrow">SETUP</span></div>
+      <fieldset id="settings-fields">
+        <legend class="sr-only">学習設定</legend>
+        <section>
+          <div class="label-row"><h3>出題対象</h3><button id="open-import" class="small secondary" type="button">＋ デック読込</button></div>
+          <input id="deck-file" type="file" accept=".apkg,.csv,.tsv,.txt" hidden>
+          <div id="decks" class="deck-list"><p class="muted">デックを読み込んでください。</p></div>
+          <p id="selected-count" class="hint">選択中：0枚</p>
+        </section>
+        <section>
+          <h3>出題方式</h3>
+          <label class="choice"><input type="radio" name="order" value="random" checked>重複ありランダム</label>
+          <label class="choice"><input type="radio" name="order" value="rounds">重複なしランダム</label>
+          <label class="choice"><input type="radio" name="order" value="weak">苦手優先</label>
+          <p id="order-help" class="hint">カードを毎回ランダムに選びます。</p>
+          <label id="count-label" class="number-row">問題数<input id="count" type="number" min="1" max="10000" step="1" value="20" required></label>
+          <label id="rounds-label" class="number-row" hidden>周回数<input id="rounds" type="number" min="1" max="1000" step="1" value="1" required></label>
+        </section>
+        <section>
+          <h3>正誤判定</h3>
+          <div class="radio-row"><label class="choice"><input type="radio" name="judge" value="sequential" checked>逐次判定</label><label class="choice"><input type="radio" name="judge" value="enter">Enter判定</label></div>
+          <label class="choice"><input id="case-sensitive" type="checkbox">英字の大文字・小文字を区別する</label>
+          <label class="number-row">結果の表示時間<span class="unit-input"><input id="delay" type="number" min="0" max="10000" step="10" value="500" required>ms</span></label>
+          <p class="hint">ひらがなはIMEをオフにしてローマ字で入力。</p>
+        </section>
+      </fieldset>
+      <div class="session-buttons"><button id="start" class="primary" disabled>学習を開始</button><button id="pause" class="secondary" disabled>中断</button><button id="stop" class="quiet" disabled>終了</button></div>
+      <details class="help"><summary>入力について</summary><p>shi / si、chi / ti などの複数表記に対応します。「っ」は子音重複や xtu / ltu、「ー」は - で入力。逐次判定の末尾「ん」は nn または n' で確定します。貼り付け・IME入力は使えません。</p></details>
+    </aside>
+
+    <div class="workspace">
+      <section class="panel training-panel" aria-labelledby="training-title">
+        <div class="training-header"><div><span class="eyebrow">TRAINING</span><h2 id="training-title">準備できたら、始めましょう</h2></div><span id="progress" class="progress">— / —</span></div>
+        <progress id="progress-bar" max="1" value="0" aria-label="回答済みの問題数"></progress>
+        <div id="question" class="question"><div class="empty-state"><span aria-hidden="true">あ → a</span><p>デックを読み込み、出題対象を選択してください。</p></div></div>
+        <div id="feedback" class="feedback" aria-live="polite"><span class="muted">判定結果はここに表示されます</span></div>
+        <label for="answer" class="input-label">回答 <span id="input-hint">ローマ字で入力</span></label>
+        <input id="answer" class="answer-input" type="text" placeholder="ここに入力" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="input-hint" disabled>
+        <div class="previous"><h3>前回の結果</h3><div id="previous" class="previous-body"><p class="muted">まだ回答がありません。</p></div></div>
+      </section>
+
+      <section class="panel history-panel" aria-labelledby="history-title">
+        <div class="section-title"><div><h2 id="history-title">学習履歴</h2><p class="hint">現在の成績は、カードごとの最終リセット以降で集計</p></div><span id="saved-status" class="saved-status">保存準備中</span></div>
+        <div class="metrics"><div><span>回答数</span><strong id="metric-count">0</strong></div><div><span>正答率</span><strong id="metric-accuracy">—</strong></div><div><span>初動・正答平均</span><strong id="metric-first">—</strong></div><div><span>合計・正答平均</span><strong id="metric-total">—</strong></div></div>
+        <p id="session-summary" class="session-summary" hidden></p>
+        <div class="table-scroll"><table><thead><tr><th>デック / 問題</th><th>正解</th><th>回答数</th><th>正答率</th><th>初動平均</th><th>合計平均</th></tr></thead><tbody id="stats-body"></tbody></table></div>
+        <div class="history-actions">
+          <button id="export-backup" class="secondary small">バックアップJSON</button>
+          <button id="restore-backup" class="secondary small">バックアップ読込</button>
+          <input id="backup-file" type="file" accept=".json" hidden>
+          <button id="export-raw" class="quiet small">生ログJSON</button>
+          <button id="export-csv" class="quiet small">回答CSV</button>
+          <button id="export-stats" class="quiet small">集計CSV</button>
+          <button id="open-reset" class="danger-text small">成績リセット</button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <footer>デック・学習履歴は、このブラウザ内に保存されます。大切な履歴はバックアップしてください。</footer>
+
+  <dialog id="import-dialog" aria-labelledby="import-title">
+    <div class="dialog-header"><div><span class="eyebrow">IMPORT</span><h2 id="import-title">フィールドを確認</h2></div><button id="close-import" class="quiet" aria-label="取り込みを閉じる">✕</button></div>
+    <p id="import-source" class="hint"></p>
+    <p>問題・正解・補足に使う項目を選んでください。補足は回答後に表示します。</p>
+    <div id="field-mappings"></div>
+    <p id="import-count" class="import-count"></p>
+    <div class="table-scroll import-preview"><table><thead><tr><th>問題</th><th>正解</th><th>補足</th><th>確認結果</th></tr></thead><tbody id="import-preview"></tbody></table></div>
+    <details id="import-errors" hidden><summary>除外するカードと理由</summary><ul></ul></details>
+    <p class="hint">画像・テキストを取り込みます。Ankiの装飾・音声・スクリプトは再現しません。同じカードの再取り込みは更新扱いです。</p>
+    <div class="dialog-actions"><button id="cancel-import" class="secondary">キャンセル</button><button id="confirm-import" class="primary">取り込む</button></div>
+  </dialog>
+
+  <dialog id="reset-dialog" aria-labelledby="reset-title">
+    <h2 id="reset-title">成績・出題の重みをリセット</h2>
+    <p>対象カードを未学習に戻します。過去の生ログと画像は残ります。</p>
+    <label class="choice"><input type="radio" name="reset-scope" value="selected" checked>選択中のデック</label>
+    <label class="choice"><input type="radio" name="reset-scope" value="all">すべてのデック</label>
+    <p class="hint">先にバックアップJSONを保存し、ファイルを確認してください。</p>
+    <button id="reset-backup" class="secondary">バックアップJSONを保存</button>
+    <div class="dialog-actions"><button id="cancel-reset" class="secondary">キャンセル</button><button id="confirm-reset" class="danger">リセットする</button></div>
+  </dialog>
+</body>
+</html>
