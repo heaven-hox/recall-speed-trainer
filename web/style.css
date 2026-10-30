@@ -63,6 +63,9 @@ progress::-webkit-progress-value { background: var(--accent); }
 progress::-moz-progress-bar { background: var(--accent); }
 .question { min-height: 210px; display: flex; flex-wrap: wrap; align-content: center; align-items: center; justify-content: center; gap: 8px; padding: 24px 10px; font-size: 36px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .question img { width: 240px; max-width: 100%; max-height: 180px; object-fit: contain; }
+.countdown { text-align: center; }
+.countdown-number { display: block; font-size: 56px; font-weight: 650; color: var(--accent); font-variant-numeric: tabular-nums; }
+.countdown-caption { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .empty-state { text-align: center; color: #a3a0b6; }
 .empty-state > span { font-size: 34px; color: #b5afcf; letter-spacing: .1em; }
 .empty-state p { font-size: 12px; margin-top: 15px; }

@@ -58,6 +58,8 @@ def run_check(files, screenshot):
                 label.locator("input").set_checked(label.locator("span").inner_text() in names)
 
         def wait_question(ordinal):
+            expect(page.locator("#answer")).to_be_enabled()
+            expect(page.locator("#question .countdown")).not_to_be_visible()
             expect(page.locator("#progress")).to_have_text(f"{ordinal} / {total}")
             expect(page.locator("#answer")).to_be_enabled()
 
@@ -136,7 +138,23 @@ def run_check(files, screenshot):
         page.locator("#delay").fill("0")
         page.locator("#start").click()
         total = 3
+        expect(page.locator(".countdown-number")).to_have_text("3")
+        expect(page.locator("#answer")).to_be_enabled()
+        expect(page.locator("#answer")).to_be_focused()
+        page.locator("#answer").press_sequentially("prepare")
+        page.locator("#answer").press("Escape")
+        page.locator("#answer").dispatch_event("compositionstart", {"data": "あ"})
+        page.locator("#answer").fill("あ")
+        page.locator("#answer").press("Enter")
+        expect(page.locator(".countdown-number")).to_have_text("変換中", timeout=6000)
+        expect(page.locator("#metric-count")).to_have_text("0")
+        expect(page.locator("#pause")).to_have_text("中断")
+        expect(page.locator("#progress")).to_have_text("準備中 / 3")
+        prepared_at = page.evaluate("Date.now()")
+        page.locator("#answer").dispatch_event("compositionend", {"data": "あ"})
         wait_question(1)
+        expect(page.locator("#answer")).to_have_value("")
+        expect(page.locator("#answer")).to_be_focused()
         page.locator("#answer").press_sequentially("apple")
         page.locator("#answer").press("Enter")
         wait_question(2)
@@ -152,6 +170,10 @@ def run_check(files, screenshot):
         assert [a["correct"] for a in recent] == [False, True, False]
         assert recent[-1]["firstMs"] is None
         assert any(k["key"] == "Backspace" for k in recent[1]["keys"])
+        assert page.evaluate("value => Date.parse(value)", recent[0]["startedAt"]) >= prepared_at
+        assert [k["key"] for k in recent[0]["keys"]] == ["a", "p", "p", "l", "e", "Enter"]
+        assert all(a["trial"] == a["ordinal"] for a in recent)
+        checks.append("開始前3秒・入力欄の活性化とフォーカス・変換終了待ち・準備入力をログと計測から除外")
         checks.append("CSV・英字大小区別・Enter判定・修正キー・空回答")
 
         select_decks(["N"])
@@ -166,6 +188,8 @@ def run_check(files, screenshot):
         page.evaluate("window.dispatchEvent(new Event('blur'))")
         expect(page.locator("#pause")).to_have_text("再開")
         page.locator("#pause").click()
+        expect(page.locator(".countdown-number")).to_have_text("3")
+        wait_question(1)
         expect(page.locator("#answer")).to_have_value("")
         expect(page.locator("#answer")).to_be_enabled()
         page.locator("#answer").press_sequentially("nn")
@@ -432,6 +456,27 @@ def run_check(files, screenshot):
                 expect(page.locator("#" + metric)).to_have_text(expected)
         assert len(final_data["attempts"]) == 26
         checks.append("履歴の全カード／有効のみ切替・4指標の集計・空表示・再読込と復元で保持")
+        page.locator("#count").fill("1")
+        page.locator("#start").click()
+        expect(page.locator(".countdown-number")).to_have_text("3")
+        expect(page.locator("#answer")).to_be_focused()
+        page.locator("#pause").click()
+        expect(page.locator("#pause")).to_have_text("再開")
+        page.wait_for_timeout(3300)  # Let the cancelled countdown's original deadline pass.
+        expect(page.locator("#answer")).to_be_disabled()
+        expect(page.locator(".countdown-number")).not_to_be_visible()
+        page.locator("#pause").click()
+        expect(page.locator(".countdown-number")).to_have_text("3")
+        expect(page.locator("#answer")).to_be_enabled()
+        page.locator("#stop").click()
+        expect(page.locator("#start")).to_be_enabled()
+        page.wait_for_timeout(3300)
+        expect(page.locator("#training-title")).to_have_text("学習を終了しました")
+        expect(page.locator("#answer")).to_be_disabled()
+        cancelled, _ = exported()
+        assert len(cancelled["attempts"]) == len(final_data["attempts"])
+        assert cancelled["sessions"][-1]["answered"] == 0
+        checks.append("準備中の中断・再開で3秒をやり直す・終了後に出題せず回答ログも増やさない")
         if screenshot:
             page.reload()
             expect(page.locator("#saved-status")).to_have_text("ブラウザに保存済み")

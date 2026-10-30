@@ -3,6 +3,7 @@ import { RULE_VERSION, normalizeAnswer, answerError, createMatcher, createSchedu
 
 const $ = id => document.getElementById(id);
 const stores = ["decks", "cards", "sessions", "attempts", "resets", "meta"];
+const COUNTDOWN_SECONDS = 3;
 const defaults = { order: "random", judge: "sequential", count: 20, rounds: 1, delay: 500, caseSensitive: false, selectedDecks: [], historyScope: "all" };
 const state = { decks: [], cards: [], sessions: [], attempts: [], resets: [], settings: { ...defaults } };
 let db, run = null, pendingImport = null, importBusy = false, cardSelection = null;
@@ -442,40 +443,74 @@ function makeAttempt(r, outcome) {
     keys: [...r.keys], ruleVersion: RULE_VERSION };
 }
 
-async function presentCard(r, card) {
-  r.phase = "loading"; r.current = card; r.trial++; r.pauseRequested = false;
+async function presentCard(r, card, prepare = false) {
+  r.phase = prepare ? "countdown" : "loading"; r.current = card; r.pauseRequested = false; r.composing = false;
   const token = ++r.renderToken;
   controls();
-  $("training-title").textContent = state.decks.find(d => d.id === card.deckId)?.name || "学習中";
-  $("progress").textContent = `${r.index} / ${r.schedule.total}`;
+  $("training-title").textContent = prepare ? "開始の準備をしてください" : state.decks.find(d => d.id === card.deckId)?.name || "学習中";
+  $("progress").textContent = prepare ? `準備中 / ${r.schedule.total}` : `${r.index} / ${r.schedule.total}`;
   $("progress-bar").max = r.schedule.total; $("progress-bar").value = r.session.answered;
-  $("answer").value = ""; $("answer").disabled = true;
-  $("input-hint").textContent = r.session.settings.judge === "enter" ? "入力後にEnterで判定" : "入力するたびに判定";
+  $("answer").value = ""; $("answer").disabled = !prepare;
+  $("answer").placeholder = prepare ? "入力モードを確認できます" : "ここに入力";
+  $("input-hint").textContent = prepare ? "IMEをオフにして直接入力に切り替えてください" : "問題を読み込んでいます";
   $("feedback").className = "feedback";
-  $("feedback").replaceChildren(node("span", "回答を入力してください", "muted"));
-  $("question").style.visibility = "hidden";
-  renderParts($("question"), card.question);
-  try {
-    await Promise.all([...$("question").querySelectorAll("img")].map(image => image.decode()));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    if (run !== r || r.phase !== "loading" || token !== r.renderToken) return;
+  $("feedback").replaceChildren(node("span", prepare ? "準備中の入力は判定・計測・記録しません。出題時に消去します。" : "回答を入力してください", "muted"));
+  $("question").style.visibility = prepare ? "visible" : "hidden";
+  // Decode off-screen while the countdown runs; keep the input focused through reveal.
+  const prompt = node("div"); renderParts(prompt, card.question);
+  let ready = false;
+  const deadline = performance.now() + COUNTDOWN_SECONDS * 1000;
+  const number = node("span", String(COUNTDOWN_SECONDS), "countdown-number");
+  const caption = node("p", "直接入力に切り替えてお待ちください", "countdown-caption");
+  const current = () => run === r && token === r.renderToken && ["loading", "countdown"].includes(r.phase);
+  const reveal = () => {
+    if (!current()) return;
+    if (prepare && r.composing) { r.timer = setTimeout(tick, 100); return; }
+    $("question").replaceChildren(...prompt.childNodes);
     $("question").style.visibility = "visible";
+    $("training-title").textContent = state.decks.find(d => d.id === card.deckId)?.name || "学習中";
+    $("progress").textContent = `${r.index} / ${r.schedule.total}`;
+    $("feedback").replaceChildren(node("span", "回答を入力してください", "muted"));
+    $("input-hint").textContent = r.session.settings.judge === "enter" ? "入力後にEnterで判定" : "入力するたびに判定";
+    $("answer").value = ""; $("answer").placeholder = "ここに入力";
     r.matcher = createMatcher(card.answer, r.session.settings.caseSensitive);
-    r.keys = []; r.firstMs = null; r.t0 = performance.now(); r.startedAt = now();
+    r.trial++; r.keys = []; r.firstMs = null; r.t0 = performance.now(); r.startedAt = now();
     r.phase = "answering"; $("answer").disabled = false; $("answer").focus(); controls();
+  };
+  const tick = () => {
+    if (!current()) return;
+    const seconds = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+    if (!seconds && ready && !r.composing) { requestAnimationFrame(reveal); return; }
+    const text = seconds ? String(seconds) : !ready ? "準備中" : "変換中";
+    if (number.textContent !== text) number.textContent = text;
+    const hint = !seconds && r.composing ? "変換を確定・取消しして、IMEをオフにしてください" : "直接入力に切り替えてお待ちください";
+    if (caption.textContent !== hint) caption.textContent = hint;
+    r.timer = setTimeout(tick, 100);
+  };
+  if (prepare) {
+    const countdown = node("div", undefined, "countdown");
+    countdown.setAttribute("role", "status");
+    countdown.append(number, caption); $("question").replaceChildren(countdown);
+    $("answer").focus(); tick();
+  }
+  try {
+    await Promise.all([...prompt.querySelectorAll("img")].map(image => image.decode()));
+    if (!current()) return;
+    ready = true;
+    if (!prepare) requestAnimationFrame(reveal);
   } catch {
     if (run !== r || token !== r.renderToken) return;
-    r.phase = "paused"; r.resumeAction = "current";
+    clearTimeout(r.timer); hold(r, "current");
     notice("問題画像を表示できません。デックを確認してください。再開で再試行できます。", true); controls();
   }
 }
 
-async function nextQuestion(r) {
+async function nextQuestion(r, prepare = false) {
   if (run !== r) return;
   const card = r.schedule.next(cardStats(r.cards, state.attempts));
   if (!card) return endSession("completed");
   r.index++;
-  await presentCard(r, card);
+  await presentCard(r, card, prepare);
 }
 
 async function startSession() {
@@ -496,7 +531,7 @@ async function startSession() {
     await write({ sessions: [session], meta: [{ id: "settings", value: settings }] });
     state.sessions.push(session);
     if (r.pauseRequested) { r.phase = "paused"; r.resumeAction = "next"; controls(); }
-    else await nextQuestion(r);
+    else await nextQuestion(r, true);
   } catch (error) { run = null; controls(); notice("学習を開始できません：" + error.message, true); }
 }
 
@@ -565,8 +600,8 @@ async function togglePause() {
   }
   if (r.phase !== "paused") return pauseSession();
   if (r.resumeAction === "end") return endSession(r.session.status);
-  if (r.resumeAction === "next") return nextQuestion(r);
-  return presentCard(r, r.current);
+  if (r.resumeAction === "next") return nextQuestion(r, true);
+  return presentCard(r, r.current, true);
 }
 
 async function endSession(status = "stopped") {
@@ -720,8 +755,13 @@ for (const type of ["paste", "drop"]) $("answer").addEventListener(type, event =
   event.preventDefault(); notice("計測のため、貼り付けではなくキーボードで入力してください。");
 });
 $("answer").addEventListener("compositionstart", () => {
-  notice("IMEをオフにしてから再開してください。"); pauseSession().catch(reportError);
+  if (!run) return;
+  run.composing = true;
+  if (run.phase === "answering") {
+    notice("IMEをオフにしてから再開してください。"); pauseSession().catch(reportError);
+  }
 });
+$("answer").addEventListener("compositionend", () => { if (run) run.composing = false; });
 window.addEventListener("blur", () => pauseSession().catch(reportError));
 document.addEventListener("visibilitychange", () => { if (document.hidden) pauseSession().catch(reportError); });
 window.addEventListener("beforeunload", event => { if (run) { event.preventDefault(); event.returnValue = ""; } });
