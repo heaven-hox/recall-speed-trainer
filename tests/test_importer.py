@@ -6,7 +6,9 @@ import sqlite3
 import tempfile
 import unittest
 import zipfile
+from contextlib import closing, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import zstandard
 
@@ -32,7 +34,7 @@ def field(number, value):
 def package(modern=True, corrupt=False):
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "collection"
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executescript("""
                 CREATE TABLE notes(id, guid, mid, flds);
                 CREATE TABLE cards(id, nid, did, ord);
@@ -72,6 +74,66 @@ def package(modern=True, corrupt=False):
 
 
 class ImporterTests(unittest.TestCase):
+    def test_database_is_closed_before_temporary_directory_cleanup(self):
+        for modern in (True, False):
+            with self.subTest(modern=modern):
+                data = package(modern)
+                connections = []
+                real_connect = sqlite3.connect
+                real_directory = tempfile.TemporaryDirectory
+
+                def connect(*args, **kwargs):
+                    db = real_connect(*args, **kwargs)
+                    connections.append(db)
+                    return db
+
+                @contextmanager
+                def windows_directory(*args, **kwargs):
+                    with real_directory(*args, **kwargs) as folder:
+                        try:
+                            yield folder
+                        finally:
+                            for db in connections:
+                                try:
+                                    db.execute("SELECT 1")
+                                except sqlite3.ProgrammingError:
+                                    continue
+                                db.close()
+                                raise PermissionError("Windows cannot remove an open SQLite database")
+
+                with patch("importer.sqlite3.connect", side_effect=connect), \
+                     patch("importer.tempfile.TemporaryDirectory", side_effect=windows_directory):
+                    result = import_apkg(data)
+                self.assertEqual(len(connections), 1)
+                self.assertEqual(len(result["cards"]), 1)
+
+    def test_database_is_closed_when_reading_fails(self):
+        data = package()
+        connections = []
+        real_connect = sqlite3.connect
+
+        def connect(*args, **kwargs):
+            db = real_connect(*args, **kwargs)
+            connections.append(db)
+            return db
+
+        with patch("importer.sqlite3.connect", side_effect=connect), \
+             patch("importer.parse_field", side_effect=ValueError("invalid field")), \
+             self.assertRaises(ImportError):
+            import_apkg(data)
+        self.assertEqual(len(connections), 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connections[0].execute("SELECT 1")
+
+    def test_temporary_database_path_can_contain_unicode_spaces_and_hash(self):
+        data = package()
+        with tempfile.TemporaryDirectory() as folder:
+            special = Path(folder) / "日本語 # path"
+            special.mkdir()
+            with patch("importer.tempfile.tempdir", str(special)):
+                result = import_apkg(data)
+        self.assertEqual(len(result["cards"]), 1)
+
     def test_modern_and_legacy_field_mapping_and_media(self):
         for modern in (True, False):
             with self.subTest(modern=modern):

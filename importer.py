@@ -9,6 +9,7 @@ import re
 import sqlite3
 import tempfile
 import zipfile
+from contextlib import closing
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -179,7 +180,8 @@ def _import_apkg(data):
     with tempfile.TemporaryDirectory(prefix="recall-import-") as folder:
         path = Path(folder) / "collection.sqlite"
         path.write_bytes(collection)
-        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        # Connection.__exit__ handles transactions, not closing; Windows locks open files.
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
             db.execute("PRAGMA query_only = ON")
             db.execute("PRAGMA trusted_schema = OFF")
             db.create_collation("unicase", lambda a, b: (a.casefold() > b.casefold()) - (a.casefold() < b.casefold()))
