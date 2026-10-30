@@ -3,7 +3,7 @@ import { RULE_VERSION, normalizeAnswer, answerError, createMatcher, createSchedu
 
 const $ = id => document.getElementById(id);
 const stores = ["decks", "cards", "sessions", "attempts", "resets", "meta"];
-const defaults = { order: "random", judge: "sequential", count: 20, rounds: 1, delay: 500, caseSensitive: false, selectedDecks: [] };
+const defaults = { order: "random", judge: "sequential", count: 20, rounds: 1, delay: 500, caseSensitive: false, selectedDecks: [], historyScope: "all" };
 const state = { decks: [], cards: [], sessions: [], attempts: [], resets: [], settings: { ...defaults } };
 let db, run = null, pendingImport = null, importBusy = false, cardSelection = null;
 const id = () => crypto.randomUUID();
@@ -77,7 +77,7 @@ function readSettings() {
   const numeric = key => $(key).validity.valid ? Number($(key).value) : defaults[key];
   return { order: radio("order"), judge: radio("judge"), count: numeric("count"),
     rounds: numeric("rounds"), delay: numeric("delay"), caseSensitive: $("case-sensitive").checked,
-    selectedDecks: [...$("decks").querySelectorAll("input:checked")].map(e => e.value) };
+    selectedDecks: [...$("decks").querySelectorAll("input:checked")].map(e => e.value), historyScope: $("history-scope").value };
 }
 
 function applySettings() {
@@ -87,6 +87,7 @@ function applySettings() {
   }
   for (const key of ["count", "rounds", "delay"]) $(key).value = state.settings[key];
   $("case-sensitive").checked = state.settings.caseSensitive;
+  $("history-scope").value = state.settings.historyScope;
   orderHelp();
 }
 
@@ -103,6 +104,7 @@ function orderHelp() {
 
 function controls() {
   const active = !!run;
+  $("history-scope").disabled = !db;
   $("stats-body").closest(".table-scroll").hidden = active;
   $("settings-fields").disabled = active || importBusy || !db;
   $("start").disabled = active || importBusy || !db || !enabledCards().length;
@@ -158,7 +160,7 @@ function renderParts(container, parts) {
 }
 
 function renderStats() {
-  const cards = selectedCards();
+  const cards = state.settings.historyScope === "enabled" ? enabledCards() : selectedCards();
   const stats = cardStats(cards, state.attempts);
   const totals = [...stats.values()];
   const count = totals.reduce((n, s) => n + s.count, 0);
@@ -184,7 +186,10 @@ function renderStats() {
     body.append(row);
   }
   if (!cards.length) {
-    const cell = node("td", "デックを選ぶと、カードごとの成績を表示します。", "muted");
+    const text = state.settings.historyScope === "enabled"
+      ? "表示対象の有効なカードがありません。デックとカードの選択を確認してください。"
+      : "デックを選ぶと、カードごとの成績を表示します。";
+    const cell = node("td", text, "muted");
     cell.colSpan = 6;
     const row = node("tr"); row.append(cell); body.append(row);
   }
@@ -687,6 +692,12 @@ async function resetHistory() {
 function reportError(error) { notice(error.message || String(error), true); }
 
 $("settings-fields").addEventListener("change", () => settingsChanged().catch(reportError));
+$("history-scope").addEventListener("change", () => {
+  state.settings.historyScope = $("history-scope").value;
+  renderStats();
+  write({ meta: [{ id: "settings", value: state.settings }] })
+    .catch(() => notice("履歴の表示設定を保存できません。ブラウザの保存領域を確認してください。", true));
+});
 $("open-import").addEventListener("click", () => $("deck-file").click());
 $("deck-file").addEventListener("change", event => loadDeck(event.target.files[0]));
 for (const key of ["close-import", "cancel-import"]) $(key).addEventListener("click", () => $("import-dialog").close());

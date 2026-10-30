@@ -84,6 +84,8 @@ progress::-moz-progress-bar { background: var(--accent); }
 .result-correct { color: #28734f; font-weight: 700; }
 .result-wrong { color: #af4050; font-weight: 700; }
 .history-panel { padding: 22px 26px; }
+.history-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; font-size: 12px; }
+.history-filter select { width: auto; max-width: 100%; margin: 0; }
 .saved-status { font-size: 11px; color: #577967; white-space: nowrap; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
 .metrics > div { border-left: 2px solid #eeebf8; padding-left: 12px; }

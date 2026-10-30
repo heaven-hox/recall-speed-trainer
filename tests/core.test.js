@@ -143,3 +143,19 @@ test("カードの有効設定を復元でき、設定のない旧バックア�
     assert.throws(() => validateBackup(backup));
   }
 });
+
+test("履歴の表示対象は全カード・有効のみ、旧バックアップでは省略可能", () => {
+  const backup = { ...emptyBackup(), settings: {
+    order: "random", judge: "sequential", count: 1, rounds: 1, delay: 0,
+    caseSensitive: false, selectedDecks: [],
+  } };
+  assert.equal(validateBackup(backup).settings.historyScope, undefined);
+  for (const historyScope of ["all", "enabled"]) {
+    backup.settings.historyScope = historyScope;
+    assert.equal(validateBackup(backup).settings.historyScope, historyScope);
+  }
+  for (const historyScope of ["other", null, true, 0]) {
+    backup.settings.historyScope = historyScope;
+    assert.throws(() => validateBackup(backup));
+  }
+});

@@ -60,6 +60,7 @@
 
       <section class="panel history-panel" aria-labelledby="history-title">
         <div class="section-title"><div><h2 id="history-title">学習履歴</h2><p class="hint">現在の成績は、カードごとの最終リセット以降で集計</p></div><span id="saved-status" class="saved-status">保存準備中</span></div>
+        <label class="history-filter">表示対象<select id="history-scope" disabled><option value="all">デック内の全カード</option><option value="enabled">有効なカードのみ</option></select></label>
         <div class="metrics"><div><span>回答数</span><strong id="metric-count">0</strong></div><div><span>正答率</span><strong id="metric-accuracy">—</strong></div><div><span>初動・正答平均</span><strong id="metric-first">—</strong></div><div><span>合計・正答平均</span><strong id="metric-total">—</strong></div></div>
         <p id="session-summary" class="session-summary" hidden></p>
         <div class="table-scroll"><table><thead><tr><th>デック / 問題</th><th>正解</th><th>回答数</th><th>正答率</th><th>初動平均</th><th>合計平均</th></tr></thead><tbody id="stats-body"></tbody></table></div>

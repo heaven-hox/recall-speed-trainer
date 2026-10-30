@@ -202,7 +202,8 @@ export function validateBackup(data) {
     !Number.isInteger(data.settings.rounds) || data.settings.rounds < 1 || data.settings.rounds > 1000 ||
     !Number.isInteger(data.settings.delay) || data.settings.delay < 0 || data.settings.delay > 10000 || data.settings.delay % 10 ||
     typeof data.settings.caseSensitive !== "boolean" || !Array.isArray(data.settings.selectedDecks) ||
-    data.settings.selectedDecks.some(d => !string(d)))) fail();
+    data.settings.selectedDecks.some(d => !string(d)) ||
+    (data.settings.historyScope !== undefined && !["all", "enabled"].includes(data.settings.historyScope)))) fail();
   for (const key of ["decks", "cards", "sessions", "attempts", "resets"]) {
     if (!Array.isArray(data[key]) || data[key].some(x => !x || !string(x.id))) fail();
     if (new Set(data[key].map(x => x.id)).size !== data[key].length) fail();

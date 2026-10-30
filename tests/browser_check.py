@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import threading
+from math import floor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -344,7 +345,21 @@ def run_check(files, screenshot):
         assert all(c.get("enabled", True) for c in changed["cards"] if c["deckId"] != deck_id)
         checks.append("あ段からう段へ切替・検索中の一括操作・キャンセル・保存再試行・履歴保持")
 
+        expect(page.locator("#stats-body tr")).to_have_count(card_count)
+        expect(page.locator("#metric-count")).to_have_text("21")
+        page.locator("#history-scope").select_option("enabled")
+        expect(page.locator("#stats-body tr")).to_have_count(5)
+        expect(page.locator("#metric-count")).to_have_text("0")
+        for metric in ["metric-accuracy", "metric-first", "metric-total"]:
+            expect(page.locator("#" + metric)).to_have_text("—")
         page.reload()
+        expect(page.locator("#history-scope")).to_have_value("enabled")
+        expect(page.locator("#stats-body tr")).to_have_count(5)
+        expect(page.locator("#metric-count")).to_have_text("0")
+        page.locator("#history-scope").select_option("all")
+        expect(page.locator("#stats-body tr")).to_have_count(card_count)
+        expect(page.locator("#metric-count")).to_have_text("21")
+        page.locator("#history-scope").select_option("enabled")
         expect(page.locator("#selected-count")).to_have_text(f"選択中：5枚（無効：{card_count - 5}枚）")
         page.locator("#deck-file").set_input_files(str(source))
         expect(page.locator("#import-dialog")).to_be_visible()
@@ -364,6 +379,8 @@ def run_check(files, screenshot):
         page.locator("#save-cards").click()
         expect(page.locator("#start")).to_be_disabled()
         expect(page.locator("#selected-count")).to_have_text(f"選択中：0枚（無効：{card_count}枚）")
+        expect(page.locator("#stats-body")).to_contain_text("表示対象の有効なカードがありません")
+        expect(page.locator("#metric-count")).to_have_text("0")
 
         def restore(data):
             destination = Path(temporary) / "selection-backup.json"
@@ -373,11 +390,15 @@ def run_check(files, screenshot):
             expect(page.locator("#message")).to_have_text("バックアップを読み込みました。")
 
         restore(selected_backup)
+        expect(page.locator("#history-scope")).to_have_value("enabled")
+        expect(page.locator("#stats-body tr")).to_have_count(5)
         expect(page.locator("#selected-count")).to_have_text(f"選択中：5枚（無効：{card_count - 5}枚）")
         legacy = json.loads(json.dumps(selected_backup))
         for card in legacy["cards"]:
             card.pop("enabled", None)
+        legacy["settings"].pop("historyScope", None)
         restore(legacy)
+        expect(page.locator("#history-scope")).to_have_value("all")
         expect(page.locator("#selected-count")).to_have_text(f"選択中：{card_count}枚")
         expect(page.locator("#start")).to_be_enabled()
         restore(selected_backup)
@@ -392,10 +413,25 @@ def run_check(files, screenshot):
             answer = image_answers[image.get_attribute("src")] if image.count() else page.locator("#question").inner_text().split(":", 1)[1]
             assert answer in u_group, answer
             seen.append(answer)
-            page.locator("#answer").press_sequentially(ROMAJI[answer])
+            page.locator("#answer").press_sequentially("1" if ordinal == 1 else ROMAJI[answer])
         expect(page.locator("#start")).to_be_enabled()
         assert set(seen) == u_group
         checks.append("う段への切替後は新しい未学習5枚を1回ずつ出題")
+        final_data, _ = exported()
+        assert final_data["settings"]["historyScope"] == "enabled"
+        expect(page.locator("#metric-count")).to_have_text("5")
+        expect(page.locator("#metric-accuracy")).to_have_text("80.0%")
+        for scope, count, accuracy in [("all", "26", "96.2%"), ("enabled", "5", "80.0%")]:
+            page.locator("#history-scope").select_option(scope)
+            expect(page.locator("#metric-count")).to_have_text(count)
+            expect(page.locator("#metric-accuracy")).to_have_text(accuracy)
+            correct = [a for a in final_data["attempts"] if a["correct"] and (scope == "all" or a["answer"] in u_group)]
+            for metric, field in [("metric-first", "firstMs"), ("metric-total", "totalMs")]:
+                values = [a[field] for a in correct if a[field] is not None]
+                expected = f"{floor(sum(values) / len(values) + 0.5)} ms"
+                expect(page.locator("#" + metric)).to_have_text(expected)
+        assert len(final_data["attempts"]) == 26
+        checks.append("履歴の全カード／有効のみ切替・4指標の集計・空表示・再読込と復元で保持")
         if screenshot:
             page.reload()
             expect(page.locator("#saved-status")).to_have_text("ブラウザに保存済み")
