@@ -5,7 +5,7 @@ const $ = id => document.getElementById(id);
 const stores = ["decks", "cards", "sessions", "attempts", "resets", "meta"];
 const defaults = { order: "random", judge: "sequential", count: 20, rounds: 1, delay: 500, caseSensitive: false, selectedDecks: [] };
 const state = { decks: [], cards: [], sessions: [], attempts: [], resets: [], settings: { ...defaults } };
-let db, run = null, pendingImport = null, importBusy = false;
+let db, run = null, pendingImport = null, importBusy = false, cardSelection = null;
 const id = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const ms = n => n === null ? "—" : `${Math.round(n)} ms`;
@@ -69,6 +69,10 @@ function selectedCards() {
   return state.cards.filter(c => selected.has(c.deckId));
 }
 
+function enabledCards() {
+  return selectedCards().filter(c => c.enabled !== false);
+}
+
 function readSettings() {
   const numeric = key => $(key).validity.valid ? Number($(key).value) : defaults[key];
   return { order: radio("order"), judge: radio("judge"), count: numeric("count"),
@@ -101,7 +105,7 @@ function controls() {
   const active = !!run;
   $("stats-body").closest(".table-scroll").hidden = active;
   $("settings-fields").disabled = active || importBusy || !db;
-  $("start").disabled = active || importBusy || !db || !selectedCards().length;
+  $("start").disabled = active || importBusy || !db || !enabledCards().length;
   $("pause").disabled = !active || ["saving", "stopping"].includes(run?.phase);
   $("pause").textContent = run?.phase === "save-error" ? "保存を再試行" : run?.phase === "paused" ? "再開" : "中断";
   $("stop").disabled = !active || ["saving", "stopping", "save-error"].includes(run?.phase);
@@ -114,19 +118,28 @@ function renderDecks() {
   box.replaceChildren();
   if (!state.decks.length) box.append(node("p", "デックを読み込んでください。", "muted"));
   for (const deck of state.decks) {
+    const row = node("div", undefined, "deck-row");
     const label = node("label", undefined, "deck-option");
     const check = document.createElement("input");
     check.type = "checkbox";
     check.value = deck.id;
     check.checked = state.settings.selectedDecks.includes(deck.id);
-    label.append(check, node("span", deck.name), node("small", `${state.cards.filter(c => c.deckId === deck.id).length}枚`));
-    box.append(label);
+    const cards = state.cards.filter(c => c.deckId === deck.id);
+    const count = node("small", `${cards.filter(c => c.enabled !== false).length}/${cards.length}枚`);
+    count.title = "出題有効 / 全カード";
+    label.append(check, node("span", deck.name), count);
+    const select = node("button", "カード選択", "small secondary");
+    select.type = "button";
+    select.setAttribute("aria-label", `${deck.name}のカードを選択`);
+    select.addEventListener("click", () => openCardSelection(deck.id));
+    row.append(label, select); box.append(row);
   }
   renderSelected();
 }
 
 function renderSelected() {
-  $("selected-count").textContent = `選択中：${selectedCards().length}枚`;
+  const enabled = enabledCards().length, disabled = selectedCards().length - enabled;
+  $("selected-count").textContent = `選択中：${enabled}枚${disabled ? `（無効：${disabled}枚）` : ""}`;
   controls();
   renderStats();
 }
@@ -165,6 +178,7 @@ function renderStats() {
     question.append(node("small", decks.get(card.deckId)));
     const answer = node("td", card.answer);
     if (card.extra) answer.append(node("small", card.extra));
+    if (card.enabled === false) answer.append(node("small", "出題無効"));
     row.append(question, answer, node("td", String(s.count)), node("td", rate(s.correct, s.count)),
       node("td", ms(mean(s.first))), node("td", ms(mean(s.total))));
     body.append(row);
@@ -185,6 +199,74 @@ async function settingsChanged() {
   catch { notice("設定を保存できません。ブラウザの保存領域を確認してください。", true); }
 }
 
+function visibleSelectionCards() {
+  const query = $("cards-search").value.normalize("NFC").trim().toLowerCase();
+  return state.cards.filter(c => c.deckId === cardSelection.deckId &&
+    [c.answer, c.extra, ...c.question.filter(p => p.type === "text").map(p => p.value)]
+      .some(text => text.normalize("NFC").toLowerCase().includes(query)));
+}
+
+function updateSelectionCount() {
+  const values = [...cardSelection.enabled.values()];
+  $("cards-count").textContent = `出題有効：${values.filter(Boolean).length} / ${values.length}枚（表示中：${visibleSelectionCards().length}枚）`;
+}
+
+function renderCardSelection() {
+  const body = $("cards-body"); body.replaceChildren();
+  for (const card of visibleSelectionCards()) {
+    const row = node("tr"), cell = node("td"), check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = cardSelection.enabled.get(card.id);
+    check.setAttribute("aria-label", `${card.answer}の出題を有効にする`);
+    check.addEventListener("change", () => {
+      cardSelection.enabled.set(card.id, check.checked);
+      updateSelectionCount();
+    });
+    cell.append(check);
+    const question = node("td"); renderParts(question, card.question);
+    row.append(cell, question, node("td", card.answer), node("td", card.extra));
+    body.append(row);
+  }
+  updateSelectionCount();
+}
+
+function openCardSelection(deckId) {
+  if (run || importBusy || !db) return;
+  cardSelection = { deckId, saving: false,
+    enabled: new Map(state.cards.filter(c => c.deckId === deckId).map(c => [c.id, c.enabled !== false])) };
+  $("cards-title").textContent = `${state.decks.find(d => d.id === deckId).name}のカード選択`;
+  $("cards-search").value = ""; $("cards-error").hidden = true;
+  renderCardSelection(); $("cards-dialog").showModal();
+}
+
+function setVisibleCards(enabled) {
+  for (const card of visibleSelectionCards()) cardSelection.enabled.set(card.id, enabled);
+  renderCardSelection();
+}
+
+async function saveCardSelection() {
+  const draft = cardSelection;
+  if (!draft || draft.saving || run) return;
+  draft.saving = true;
+  $("cards-fields").disabled = true; $("save-cards").disabled = true; $("cancel-cards").disabled = true;
+  $("cards-error").hidden = true;
+  try {
+    const changed = state.cards.filter(c => draft.enabled.has(c.id) && (c.enabled !== false) !== draft.enabled.get(c.id))
+      .map(c => ({ ...c, enabled: draft.enabled.get(c.id) }));
+    if (changed.length) await write({ cards: changed });
+    const updates = new Map(changed.map(c => [c.id, c]));
+    state.cards = state.cards.map(c => updates.get(c.id) || c);
+    $("cards-dialog").close(); renderDecks();
+    notice(`カードの選択を保存しました。出題有効：${[...draft.enabled.values()].filter(Boolean).length} / ${draft.enabled.size}枚。`);
+  } catch (error) {
+    $("cards-error").textContent = "保存できませんでした：" + error.message;
+    $("cards-error").hidden = false;
+  } finally {
+    draft.saving = false;
+    $("cards-fields").disabled = false; $("save-cards").disabled = false; $("cancel-cards").disabled = false;
+  }
+}
+
 // Import only inert, parsed fields. No imported HTML is assigned to innerHTML.
 function buildImport() {
   const mappings = new Map();
@@ -192,6 +274,7 @@ function buildImport() {
     mappings.set(group.dataset.model, Object.fromEntries([...group.querySelectorAll("select")].map(e => [e.name, Number(e.value)])));
   }
   const accepted = [], rejected = [], seen = new Set();
+  const existing = new Map(state.cards.map(c => [c.id, c]));
   for (const source of pendingImport.cards) {
     const mapping = mappings.get(source.noteTypeId);
     const model = pendingImport.noteTypes.find(n => n.id === source.noteTypeId);
@@ -208,6 +291,7 @@ function buildImport() {
     if (seen.has(cardId)) error = "重複するカードIDです。";
     seen.add(cardId);
     const card = { id: cardId, deckId: source.deckId, question: parts, answer, extra: extra?.text || "",
+      enabled: pendingImport.enabled.get(cardId) ?? (existing.get(cardId)?.enabled !== false),
       mapping: { question: model.fields[mapping.question], answer: model.fields[mapping.answer], extra: model.fields[mapping.extra] || null },
       sourceId: source.sourceId, sourceFile: pendingImport.filename, ruleVersion: RULE_VERSION };
     (error ? rejected : accepted).push({ card, error, warnings });
@@ -215,16 +299,33 @@ function buildImport() {
   return { accepted, rejected };
 }
 
+function updateImportCount() {
+  const { accepted, rejected } = buildImport();
+  $("import-count").textContent = `${accepted.length}枚を取り込み可能（出題有効：${accepted.filter(x => x.card.enabled).length}枚） ／ ${rejected.length}枚を除外`;
+  $("confirm-import").disabled = !accepted.length;
+}
+
+function setImportCards(enabled) {
+  for (const { card } of buildImport().accepted) pendingImport.enabled.set(card.id, enabled);
+  previewImport();
+}
+
 function previewImport() {
   const { accepted, rejected } = buildImport();
-  $("import-count").textContent = `${accepted.length}枚を取り込み可能 ／ ${rejected.length}枚を除外`;
-  $("confirm-import").disabled = !accepted.length;
+  updateImportCount();
   const body = $("import-preview"); body.replaceChildren();
-  for (const { card, error, warnings } of [...accepted, ...rejected].slice(0, 30)) {
+  for (const { card, error, warnings } of [...accepted, ...rejected]) {
     const row = node("tr");
+    const cell = node("td"), check = document.createElement("input");
+    check.type = "checkbox"; check.disabled = !!error; check.checked = !error && card.enabled;
+    check.setAttribute("aria-label", `${card.answer || "空欄"}の出題を有効にする`);
+    check.addEventListener("change", () => {
+      pendingImport.enabled.set(card.id, check.checked); updateImportCount();
+    });
+    cell.append(check);
     const question = node("td");
     renderParts(question, card.question.filter(p => p.type !== "image" || p.src));
-    row.append(question, node("td", card.answer), node("td", card.extra), node("td", error || warnings.join(" ") || "OK"));
+    row.append(cell, question, node("td", card.answer), node("td", card.extra), node("td", error || warnings.join(" ") || "OK"));
     body.append(row);
   }
   $("import-errors").hidden = !rejected.length;
@@ -242,7 +343,7 @@ async function loadDeck(file) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
-    pendingImport = { ...data, filename: file.name };
+    pendingImport = { ...data, filename: file.name, enabled: new Map() };
     $("import-source").textContent = `${file.name} ／ ${data.cards.length}カード`;
     const box = $("field-mappings"); box.replaceChildren();
     for (const model of data.noteTypes) {
@@ -378,8 +479,8 @@ async function startSession() {
   const fields = [$("delay"), settings.order === "rounds" ? $("rounds") : $("count")];
   if (fields.some(input => !input.reportValidity())) return;
   state.settings = settings;
-  const cards = selectedCards();
-  if (!cards.length) return notice("出題対象を選択してください。", true);
+  const cards = enabledCards();
+  if (!cards.length) return notice("出題対象のデックと有効なカードを選択してください。", true);
   const schedule = createSchedule(cards, settings, cardStats(cards, state.attempts));
   if (schedule.total > 100000) return notice("1セッションは100,000問以下にしてください。", true);
   const session = { id: id(), startedAt: now(), endedAt: null, status: "running", settings: { ...settings },
@@ -590,6 +691,15 @@ $("open-import").addEventListener("click", () => $("deck-file").click());
 $("deck-file").addEventListener("change", event => loadDeck(event.target.files[0]));
 for (const key of ["close-import", "cancel-import"]) $(key).addEventListener("click", () => $("import-dialog").close());
 $("confirm-import").addEventListener("click", confirmImport);
+$("import-enable-all").addEventListener("click", () => setImportCards(true));
+$("import-disable-all").addEventListener("click", () => setImportCards(false));
+$("cards-search").addEventListener("input", renderCardSelection);
+$("cards-enable-all").addEventListener("click", () => setVisibleCards(true));
+$("cards-disable-all").addEventListener("click", () => setVisibleCards(false));
+$("save-cards").addEventListener("click", saveCardSelection);
+$("cancel-cards").addEventListener("click", () => $("cards-dialog").close());
+$("cards-dialog").addEventListener("cancel", event => { if (cardSelection?.saving) event.preventDefault(); });
+$("cards-dialog").addEventListener("close", () => { cardSelection = null; });
 $("start").addEventListener("click", () => startSession().catch(reportError));
 $("pause").addEventListener("click", () => togglePause().catch(reportError));
 $("stop").addEventListener("click", () => endSession().catch(reportError));

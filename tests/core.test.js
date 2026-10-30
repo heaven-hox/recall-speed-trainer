@@ -127,3 +127,19 @@ test("不正なバックアップは既存データの置換前に拒否する",
   assert.throws(() => validateBackup({ ...emptyBackup(), decks: [{ id: "a", name: "A" }],
     cards: [{ id: "a", deckId: "a", answer: "a", extra: "", historyId: "h", question: [{ type: "image", name: "x", src: "https://evil.example/x" }] }] }));
 });
+
+test("カードの有効設定を復元でき、設定のない旧バックアップも受け付ける", () => {
+  const backup = { ...emptyBackup(), decks: [{ id: "deck", name: "練習" }], cards: [{
+    id: "card", deckId: "deck", answer: "あ", extra: "", historyId: "history",
+    question: [{ type: "text", value: "問題" }],
+  }] };
+  assert.equal(validateBackup(backup).cards[0].enabled, undefined);
+  for (const enabled of [true, false]) {
+    backup.cards[0].enabled = enabled;
+    assert.equal(validateBackup(backup).cards[0].enabled, enabled);
+  }
+  for (const enabled of ["false", 0, null, []]) {
+    backup.cards[0].enabled = enabled;
+    assert.throws(() => validateBackup(backup));
+  }
+});

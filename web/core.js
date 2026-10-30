@@ -212,7 +212,8 @@ export function validateBackup(data) {
   const sessions = new Set(data.sessions.map(s => s.id));
   if (data.decks.some(d => !string(d.name))) fail();
   if (data.cards.some(c => !decks.has(c.deckId) || !validParts(c.question) ||
-    !string(c.answer) || answerError(c.answer) || !string(c.extra) || !string(c.historyId))) fail();
+    !string(c.answer) || answerError(c.answer) || !string(c.extra) || !string(c.historyId) ||
+    (c.enabled !== undefined && typeof c.enabled !== "boolean"))) fail();
   if (data.sessions.some(s => !string(s.startedAt) || !s.settings || !Array.isArray(s.cardIds) ||
     !["running", "completed", "stopped", "recovered"].includes(s.status))) fail();
   if (data.attempts.some(a => !cards.has(a.cardId) || !sessions.has(a.sessionId) || !string(a.historyId) ||

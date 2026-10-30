@@ -24,6 +24,7 @@
           <input id="deck-file" type="file" accept=".apkg,.csv,.tsv,.txt" hidden>
           <div id="decks" class="deck-list"><p class="muted">デックを読み込んでください。</p></div>
           <p id="selected-count" class="hint">選択中：0枚</p>
+          <p class="hint">各デックの「カード選択」で出題するカードを変更できます。</p>
         </section>
         <section>
           <h3>出題方式</h3>
@@ -82,10 +83,26 @@
     <p>問題・正解・補足に使う項目を選んでください。補足は回答後に表示します。</p>
     <div id="field-mappings"></div>
     <p id="import-count" class="import-count"></p>
-    <div class="table-scroll import-preview"><table><thead><tr><th>問題</th><th>正解</th><th>補足</th><th>確認結果</th></tr></thead><tbody id="import-preview"></tbody></table></div>
+    <div class="card-tools"><button id="import-enable-all" class="secondary small">すべて有効</button><button id="import-disable-all" class="secondary small">すべて無効</button></div>
+    <p class="hint">チェックを外したカードも取り込み、出題を無効にします。取り込み後にも変更できます。</p>
+    <div class="table-scroll import-preview"><table><thead><tr><th>出題</th><th>問題</th><th>正解</th><th>補足</th><th>確認結果</th></tr></thead><tbody id="import-preview"></tbody></table></div>
     <details id="import-errors" hidden><summary>除外するカードと理由</summary><ul></ul></details>
     <p class="hint">画像・テキストを取り込みます。Ankiの装飾・音声・スクリプトは再現しません。同じカードの再取り込みは更新扱いです。</p>
     <div class="dialog-actions"><button id="cancel-import" class="secondary">キャンセル</button><button id="confirm-import" class="primary">取り込む</button></div>
+  </dialog>
+
+  <dialog id="cards-dialog" aria-labelledby="cards-title">
+    <h2 id="cards-title">カード選択</h2>
+    <p>チェックしたカードだけを出題します。有効・無効を変更しても学習履歴は残ります。</p>
+    <fieldset id="cards-fields">
+      <legend class="sr-only">カードごとの出題設定</legend>
+      <label class="search-label">カードを検索<input id="cards-search" type="search" placeholder="読み・補足・問題文で検索"></label>
+      <div class="card-tools"><button id="cards-enable-all" class="secondary small">表示中をすべて有効</button><button id="cards-disable-all" class="secondary small">表示中をすべて無効</button></div>
+      <p id="cards-count" class="import-count" aria-live="polite"></p>
+      <div class="table-scroll card-selection"><table><thead><tr><th>出題</th><th>問題</th><th>正解</th><th>補足</th></tr></thead><tbody id="cards-body"></tbody></table></div>
+    </fieldset>
+    <p id="cards-error" class="result-wrong" role="alert" hidden></p>
+    <div class="dialog-actions"><button id="cancel-cards" class="secondary">キャンセル</button><button id="save-cards" class="primary">保存</button></div>
   </dialog>
 
   <dialog id="reset-dialog" aria-labelledby="reset-title">

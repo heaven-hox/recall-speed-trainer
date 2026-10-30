@@ -236,6 +236,166 @@ def run_check(files, screenshot):
             expect(page.locator("#message")).to_contain_text("読み込めませんでした")
             expect(page.locator("#metric-count")).to_have_text(str(expected_count))
             checks.append("バックアップ復元・不正バックアップで既存データを保護")
+        # Use an independent browser store to exercise per-card eligibility end to end.
+        context = browser.new_context(viewport={"width": 1440, "height": 1050}, accept_downloads=True)
+        page = context.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(url)
+        expect(page.locator("#saved-status")).to_have_text("ブラウザに保存済み")
+        if files:
+            source = files[0]
+            source_data = import_apkg(source.read_bytes())
+            deck_name = source_data["decks"][0]["name"]
+            card_count = len(source_data["cards"])
+        else:
+            source = Path(temporary) / "cards.csv"
+            answers = [answer for answer in ROMAJI if len(answer) == 1]
+            source.write_text("question,answer,deck\n" + "".join(f"symbol:{a},{a},CardSelection\n" for a in answers), encoding="utf-8")
+            deck_name, card_count = "CardSelection", len(answers)
+        page.locator("#deck-file").set_input_files(str(source))
+        expect(page.locator("#import-dialog")).to_be_visible()
+        expect(page.locator("#import-preview tr")).to_have_count(card_count)
+        page.locator("#import-disable-all").click()
+        a_group, u_group = set("あかさたな"), set("うくすつぬ")
+        for answer in a_group:
+            page.locator("#import-dialog").get_by_role("checkbox", name=f"{answer}の出題を有効にする", exact=True).check()
+        page.locator('#field-mappings select[name="answer"]').dispatch_event("change")
+        expect(page.locator("#import-preview input:checked")).to_have_count(5)
+        page.locator("#confirm-import").click()
+        expect(page.locator("#import-dialog")).not_to_be_visible()
+        upload(sample)  # Other decks must remain unaffected by the primary deck's editor.
+        select_decks([deck_name])
+        expect(page.locator("#selected-count")).to_have_text(f"選択中：5枚（無効：{card_count - 5}枚）")
+        initial, _ = exported()
+        deck_id = next(d["id"] for d in initial["decks"] if d["name"] == deck_name)
+        history_ids = {c["id"]: c["historyId"] for c in initial["cards"]}
+
+        def active_answers(data):
+            return {c["answer"] for c in data["cards"] if c["deckId"] == deck_id and c.get("enabled", True)}
+
+        assert active_answers(initial) == a_group
+        checks.append("取り込み時の個別チェック・30枚より後も選択可能・他デックとの独立")
+        page.locator("#delay").fill("0")
+        for mode in ["rounds", "random", "weak"]:
+            page.locator(f'[name=order][value={mode}]').check()
+            if mode == "rounds":
+                page.locator("#rounds").fill("1")
+            else:
+                page.locator("#count").fill("8")
+            total = 5 if mode == "rounds" else 8
+            page.locator("#start").click()
+            expect(page.get_by_role("button", name=f"{deck_name}のカードを選択", exact=True)).to_be_disabled()
+            seen = []
+            for ordinal in range(1, total + 1):
+                wait_question(ordinal)
+                image = page.locator("#question img")
+                answer = image_answers[image.get_attribute("src")] if image.count() else page.locator("#question").inner_text().split(":", 1)[1]
+                assert answer in a_group, answer
+                seen.append(answer)
+                page.locator("#answer").press_sequentially(ROMAJI[answer])
+            expect(page.locator("#start")).to_be_enabled()
+            if mode == "rounds":
+                assert set(seen) == a_group
+        trained, _ = exported()
+        assert len(trained["attempts"]) == 21
+        assert all(a["answer"] in a_group for a in trained["attempts"])
+        assert all(len(s["cardIds"]) == 5 for s in trained["sessions"])
+        checks.append("有効な5枚だけを全3方式で出題・無効な未学習カードも除外")
+
+        def open_cards():
+            page.get_by_role("button", name=f"{deck_name}のカードを選択", exact=True).click()
+            expect(page.locator("#cards-dialog")).to_be_visible()
+
+        open_cards()
+        page.locator("#cards-disable-all").click()
+        page.locator("#cancel-cards").click()
+        cancelled, _ = exported()
+        assert active_answers(cancelled) == a_group
+        open_cards()
+        page.locator("#cards-disable-all").click()
+        for answer in u_group:
+            page.locator("#cards-dialog").get_by_role("checkbox", name=f"{answer}の出題を有効にする", exact=True).check()
+        page.locator("#cards-search").fill("ぬ")
+        expect(page.locator("#cards-body tr")).to_have_count(1)
+        page.locator("#cards-disable-all").click()
+        page.locator("#cards-search").fill("")
+        expect(page.locator("#cards-body input:checked")).to_have_count(4)
+        page.locator("#cards-dialog").get_by_role("checkbox", name="ぬの出題を有効にする", exact=True).check()
+        page.evaluate("""() => {
+          const original = IDBObjectStore.prototype.put;
+          IDBObjectStore.prototype.put = function(...args) {
+            if (this.name === 'cards') {
+              IDBObjectStore.prototype.put = original;
+              throw new DOMException('test quota failure', 'QuotaExceededError');
+            }
+            return original.apply(this, args);
+          };
+        }""")
+        page.locator("#save-cards").click()
+        expect(page.locator("#cards-error")).to_be_visible()
+        expect(page.locator("#cards-body input:checked")).to_have_count(5)
+        page.locator("#save-cards").click()
+        expect(page.locator("#cards-dialog")).not_to_be_visible()
+        changed, _ = exported()
+        assert active_answers(changed) == u_group
+        assert {c["id"]: c["historyId"] for c in changed["cards"]} == history_ids
+        assert len(changed["attempts"]) == 21
+        assert not changed["resets"]
+        assert all(c.get("enabled", True) for c in changed["cards"] if c["deckId"] != deck_id)
+        checks.append("あ段からう段へ切替・検索中の一括操作・キャンセル・保存再試行・履歴保持")
+
+        page.reload()
+        expect(page.locator("#selected-count")).to_have_text(f"選択中：5枚（無効：{card_count - 5}枚）")
+        page.locator("#deck-file").set_input_files(str(source))
+        expect(page.locator("#import-dialog")).to_be_visible()
+        for answer in u_group:
+            expect(page.locator("#import-dialog").get_by_role("checkbox", name=f"{answer}の出題を有効にする", exact=True)).to_be_checked()
+        for answer in a_group:
+            expect(page.locator("#import-dialog").get_by_role("checkbox", name=f"{answer}の出題を有効にする", exact=True)).not_to_be_checked()
+        page.locator("#confirm-import").click()
+        expect(page.locator("#import-dialog")).not_to_be_visible()
+        selected_backup, _ = exported()
+        assert active_answers(selected_backup) == u_group
+        assert {c["id"]: c["historyId"] for c in selected_backup["cards"]} == history_ids
+        checks.append("再読み込み・同じデックの再取り込みで選択と履歴を保持")
+
+        open_cards()
+        page.locator("#cards-disable-all").click()
+        page.locator("#save-cards").click()
+        expect(page.locator("#start")).to_be_disabled()
+        expect(page.locator("#selected-count")).to_have_text(f"選択中：0枚（無効：{card_count}枚）")
+
+        def restore(data):
+            destination = Path(temporary) / "selection-backup.json"
+            destination.write_text(json.dumps(data))
+            page.once("dialog", lambda dialog: dialog.accept())
+            page.locator("#backup-file").set_input_files(str(destination))
+            expect(page.locator("#message")).to_have_text("バックアップを読み込みました。")
+
+        restore(selected_backup)
+        expect(page.locator("#selected-count")).to_have_text(f"選択中：5枚（無効：{card_count - 5}枚）")
+        legacy = json.loads(json.dumps(selected_backup))
+        for card in legacy["cards"]:
+            card.pop("enabled", None)
+        restore(legacy)
+        expect(page.locator("#selected-count")).to_have_text(f"選択中：{card_count}枚")
+        expect(page.locator("#start")).to_be_enabled()
+        restore(selected_backup)
+        checks.append("全無効で開始不可・バックアップで選択を復元・旧データは全有効")
+        page.locator('[name=order][value=weak]').check()
+        page.locator("#count").fill("5")
+        total, seen = 5, []
+        page.locator("#start").click()
+        for ordinal in range(1, 6):
+            wait_question(ordinal)
+            image = page.locator("#question img")
+            answer = image_answers[image.get_attribute("src")] if image.count() else page.locator("#question").inner_text().split(":", 1)[1]
+            assert answer in u_group, answer
+            seen.append(answer)
+            page.locator("#answer").press_sequentially(ROMAJI[answer])
+        expect(page.locator("#start")).to_be_enabled()
+        assert set(seen) == u_group
+        checks.append("う段への切替後は新しい未学習5枚を1回ずつ出題")
         if screenshot:
             page.reload()
             expect(page.locator("#saved-status")).to_have_text("ブラウザに保存済み")
